@@ -1,0 +1,274 @@
+﻿<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>ShopNeo – Hệ Thống Gợi Ý</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css"/>
+  <style>
+    .product-card:hover { transform: translateY(-4px); box-shadow: 0 12px 28px rgba(0,0,0,.12); }
+    .product-card { transition: transform .2s, box-shadow .2s; }
+    .badge { font-size: 11px; }
+    #toast { transition: opacity .3s; }
+  </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+
+<!-- HEADER -->
+<header class="bg-indigo-700 text-white shadow-lg sticky top-0 z-50">
+  <div class="max-w-7xl mx-auto px-4 py-3 flex items-center gap-4">
+    <a href="/" class="flex items-center gap-2 font-bold text-xl whitespace-nowrap">
+      <i class="fa-solid fa-store"></i> ShopNeo
+    </a>
+    <!-- Search -->
+    <div class="flex-1 max-w-xl">
+      <div class="flex rounded-lg overflow-hidden">
+        <input id="searchInput" type="text" placeholder="Tìm kiếm sản phẩm..."
+               class="flex-1 px-4 py-2 text-gray-800 focus:outline-none text-sm"/>
+        <button onclick="applyFilters()" class="bg-yellow-400 hover:bg-yellow-300 text-gray-900 px-4 font-semibold">
+          <i class="fa fa-search"></i>
+        </button>
+      </div>
+    </div>
+    <!-- Login selector -->
+    <div class="flex items-center gap-2 ml-auto">
+      <i class="fa fa-user-circle text-2xl"></i>
+      <select id="customerSelect" onchange="onCustomerChange()"
+              class="bg-indigo-800 border border-indigo-500 rounded px-3 py-1.5 text-sm text-white focus:outline-none">
+        <option value="">-- Chọn Khách Hàng --</option>
+      </select>
+      <a id="profileLink" href="#" class="hidden bg-yellow-400 text-gray-900 px-3 py-1.5 rounded text-sm font-semibold hover:bg-yellow-300">
+        <i class="fa fa-history"></i> Lịch sử
+      </a>
+    </div>
+  </div>
+</header>
+
+<div class="max-w-7xl mx-auto px-4 py-6 flex gap-6">
+
+  <!-- SIDEBAR -->
+  <aside class="w-56 flex-shrink-0">
+    <!-- Categories -->
+    <div class="bg-white rounded-xl shadow p-4 mb-4">
+      <h3 class="font-bold text-gray-700 mb-3 flex items-center gap-2">
+        <i class="fa fa-list text-indigo-600"></i> Danh mục
+      </h3>
+      <ul id="categoryList" class="space-y-1 text-sm"></ul>
+    </div>
+    <!-- Brands -->
+    <div class="bg-white rounded-xl shadow p-4">
+      <h3 class="font-bold text-gray-700 mb-3 flex items-center gap-2">
+        <i class="fa fa-tag text-indigo-600"></i> Thương hiệu
+      </h3>
+      <div id="brandList" class="space-y-1 text-sm max-h-60 overflow-y-auto"></div>
+    </div>
+  </aside>
+
+  <!-- MAIN -->
+  <main class="flex-1">
+    <!-- Active filters -->
+    <div id="filterBar" class="flex items-center gap-2 mb-4 flex-wrap"></div>
+
+    <!-- Products grid -->
+    <div id="productGrid" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4"></div>
+    <div id="loading" class="text-center py-12 text-gray-400 hidden">
+      <i class="fa fa-spinner fa-spin text-3xl"></i>
+    </div>
+    <div id="emptyMsg" class="text-center py-12 text-gray-400 hidden">
+      <i class="fa fa-box-open text-4xl mb-2"></i>
+      <p>Không tìm thấy sản phẩm</p>
+    </div>
+  </main>
+</div>
+
+<!-- TOAST -->
+<div id="toast" class="fixed bottom-6 right-6 bg-green-600 text-white px-5 py-3 rounded-xl shadow-xl opacity-0 pointer-events-none text-sm z-50 flex items-center gap-2">
+  <i class="fa fa-check-circle"></i> <span id="toastMsg"></span>
+</div>
+
+<script>
+const API = '';
+let activeCategory = null, activeBrand = null, activeSearch = '';
+let currentCustomer = null;
+
+// ── Boot ────────────────────────────────────────────────────────
+async function boot() {
+  await Promise.all([loadCategories(), loadBrands(), loadCustomers()]);
+  loadProducts();
+}
+
+// ── Customers ───────────────────────────────────────────────────
+async function loadCustomers() {
+  const res = await fetch(`${API}/api/customers`);
+  const customers = await res.json();
+  const sel = document.getElementById('customerSelect');
+  customers.forEach(c => {
+    const opt = document.createElement('option');
+    opt.value = c.id;
+    opt.textContent = `${c.id} – ${c.name || c.email}`;
+    sel.appendChild(opt);
+  });
+  // Restore from sessionStorage
+  const saved = sessionStorage.getItem('customerId');
+  if (saved) { sel.value = saved; onCustomerChange(); }
+}
+
+function onCustomerChange() {
+  const sel = document.getElementById('customerSelect');
+  currentCustomer = sel.value || null;
+  if (currentCustomer) {
+    sessionStorage.setItem('customerId', currentCustomer);
+    document.getElementById('profileLink').href = `/customer?id=${currentCustomer}`;
+    document.getElementById('profileLink').classList.remove('hidden');
+    showToast(`Đã đăng nhập: ${currentCustomer}`);
+  } else {
+    sessionStorage.removeItem('customerId');
+    document.getElementById('profileLink').classList.add('hidden');
+  }
+}
+
+// ── Categories ──────────────────────────────────────────────────
+async function loadCategories() {
+  const res = await fetch(`${API}/api/products/categories`);
+  const cats = await res.json();
+  const ul = document.getElementById('categoryList');
+  const allLi = document.createElement('li');
+  allLi.innerHTML = `<button onclick="setCategory(null)" id="cat-all"
+    class="w-full text-left px-2 py-1 rounded text-indigo-700 font-semibold hover:bg-indigo-50">
+    Tất cả danh mục</button>`;
+  ul.appendChild(allLi);
+  cats.forEach(c => {
+    const li = document.createElement('li');
+    li.innerHTML = `<button onclick="setCategory('${c.id}')" id="cat-${c.id}"
+      class="w-full text-left px-2 py-1 rounded text-gray-600 hover:bg-indigo-50 hover:text-indigo-700 truncate" title="${c.name}">
+      ${c.name}</button>`;
+    ul.appendChild(li);
+  });
+}
+
+function setCategory(catId) {
+  activeCategory = catId;
+  document.querySelectorAll('[id^="cat-"]').forEach(b => b.classList.remove('text-indigo-700','font-semibold','bg-indigo-50'));
+  const btn = document.getElementById('cat-' + (catId || 'all'));
+  if (btn) btn.classList.add('text-indigo-700','font-semibold','bg-indigo-50');
+  applyFilters();
+}
+
+// ── Brands ──────────────────────────────────────────────────────
+async function loadBrands() {
+  const res = await fetch(`${API}/api/products/brands`);
+  const brands = await res.json();
+  const div = document.getElementById('brandList');
+  brands.forEach(b => {
+    div.innerHTML += `<label class="flex items-center gap-2 cursor-pointer hover:text-indigo-700">
+      <input type="checkbox" value="${b}" onchange="toggleBrand('${b}')" class="accent-indigo-600"/>
+      <span>${b}</span></label>`;
+  });
+}
+
+const selectedBrands = new Set();
+function toggleBrand(brand) {
+  if (selectedBrands.has(brand)) selectedBrands.delete(brand);
+  else selectedBrands.add(brand);
+  applyFilters();
+}
+
+// ── Products ────────────────────────────────────────────────────
+async function loadProducts() {
+  const grid = document.getElementById('productGrid');
+  const loading = document.getElementById('loading');
+  const emptyMsg = document.getElementById('emptyMsg');
+  grid.innerHTML = '';
+  loading.classList.remove('hidden');
+  emptyMsg.classList.add('hidden');
+
+  const params = new URLSearchParams({ limit: 80 });
+  if (activeSearch) params.set('search', activeSearch);
+  if (activeCategory) params.set('categoryId', activeCategory);
+  if (selectedBrands.size === 1) params.set('brand', [...selectedBrands][0]);
+
+  const res = await fetch(`${API}/api/products?${params}`);
+  let products = await res.json();
+
+  // Client-side multi-brand filter
+  if (selectedBrands.size > 1) {
+    products = products.filter(p => selectedBrands.has(p.brand));
+  }
+
+  loading.classList.add('hidden');
+  if (!products.length) { emptyMsg.classList.remove('hidden'); return; }
+
+  products.forEach(p => {
+    const price = Number(p.price).toLocaleString('vi-VN');
+    const stockBadge = p.stock <= 5
+      ? `<span class="badge bg-red-100 text-red-700 px-2 py-0.5 rounded-full">Còn ${p.stock}</span>`
+      : `<span class="badge bg-green-100 text-green-700 px-2 py-0.5 rounded-full">Còn hàng</span>`;
+    grid.innerHTML += `
+      <div class="product-card bg-white rounded-xl shadow overflow-hidden cursor-pointer"
+           onclick="gotoProduct('${p.id}')">
+        <div class="bg-gradient-to-br from-indigo-50 to-blue-100 h-36 flex items-center justify-center text-5xl">
+          ${productEmoji(p.categoryName)}
+        </div>
+        <div class="p-3">
+          <p class="text-xs text-indigo-500 font-medium mb-1">${p.categoryName || ''}</p>
+          <h3 class="text-sm font-semibold text-gray-800 leading-snug line-clamp-2 mb-2">${p.name}</h3>
+          <p class="text-xs text-gray-500 mb-2">${p.brand}</p>
+          <div class="flex items-center justify-between">
+            <span class="text-indigo-700 font-bold text-sm">${price}đ</span>
+            ${stockBadge}
+          </div>
+        </div>
+      </div>`;
+  });
+}
+
+function productEmoji(cat) {
+  if (!cat) return '📦';
+  const m = {
+    'Laptop': '💻', 'Phụ kiện máy tính': '🖱️', 'Điện thoại': '📱',
+    'Phụ kiện điện thoại': '🔋', 'Thiết bị âm thanh': '🎧',
+    'Đồ gia dụng': '🏠', 'Chăm sóc em bé': '🍼', 'Đồ uống': '☕',
+    'Thể thao': '⚽', 'Chăm sóc cá nhân': '🧴', 'Văn phòng phẩm': '📎', 'Đồ ăn nhẹ': '🍪'
+  };
+  for (const [k,v] of Object.entries(m)) if (cat.includes(k)) return v;
+  return '📦';
+}
+
+function gotoProduct(id) {
+  window.location.href = `/product?id=${id}`;
+}
+
+function applyFilters() {
+  activeSearch = document.getElementById('searchInput').value.trim();
+  loadProducts();
+  updateFilterBar();
+}
+
+function updateFilterBar() {
+  const bar = document.getElementById('filterBar');
+  bar.innerHTML = '';
+  if (activeSearch) bar.innerHTML += chip(`🔍 "${activeSearch}"`, () => { document.getElementById('searchInput').value=''; activeSearch=''; applyFilters(); });
+}
+
+function chip(text, onRemove) {
+  const d = document.createElement('span');
+  d.className = 'inline-flex items-center gap-1 bg-indigo-100 text-indigo-700 text-xs px-3 py-1 rounded-full';
+  d.innerHTML = `${text} <button class="ml-1 hover:text-red-500">✕</button>`;
+  d.querySelector('button').onclick = onRemove;
+  return d.outerHTML;
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  document.getElementById('toastMsg').textContent = msg;
+  t.style.opacity = '1';
+  setTimeout(() => t.style.opacity = '0', 2800);
+}
+
+document.getElementById('searchInput').addEventListener('keydown', e => { if (e.key === 'Enter') applyFilters(); });
+
+boot();
+</script>
+</body>
+</html>
