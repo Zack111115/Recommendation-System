@@ -7,6 +7,17 @@ import uuid, datetime
 
 router = APIRouter()
 
+def serialize_val(val):
+    if hasattr(val, "year") and hasattr(val, "month") and hasattr(val, "day"):
+        return str(val)
+    if hasattr(val, "iso_format"):
+        return val.iso_format()
+    if isinstance(val, dict):
+        return {k: serialize_val(v) for k, v in val.items()}
+    if isinstance(val, list):
+        return [serialize_val(v) for v in val]
+    return val
+
 class CustomerCreate(BaseModel):
     id: Optional[str] = None
     name: str
@@ -22,23 +33,25 @@ def list_customers(session: Session = Depends(get_session)):
     result = session.run(
         "MATCH (c:Customer) RETURN c ORDER BY c.id LIMIT 60"
     )
-    return [dict(r["c"]) for r in result]
+    return [serialize_val(dict(r["c"])) for r in result]
 
 # ── GET /api/customers/{customer_id} ─────────────────────────────
 @router.get("/{customer_id}")
 def get_customer(customer_id: str, session: Session = Depends(get_session)):
+    cid = customer_id.strip().upper()
     result = session.run(
         "MATCH (c:Customer {id: $id}) RETURN c",
-        id=customer_id
+        id=cid
     )
     record = result.single()
     if not record:
         raise HTTPException(status_code=404, detail="Customer not found")
-    return dict(record["c"])
+    return serialize_val(dict(record["c"]))
 
 # ── GET /api/customers/{customer_id}/history ─────────────────────
 @router.get("/{customer_id}/history")
 def get_history(customer_id: str, session: Session = Depends(get_session)):
+    cid = customer_id.strip().upper()
     bought = session.run(
         """
         MATCH (c:Customer {id: $id})-[r:BOUGHT]->(p:Product)-[:BELONGS_TO]->(cat:Category)
@@ -48,28 +61,32 @@ def get_history(customer_id: str, session: Session = Depends(get_session)):
         ORDER BY r.purchasedAt DESC
         LIMIT 50
         """,
-        id=customer_id
+        id=cid
     )
     viewed = session.run(
         """
         MATCH (c:Customer {id: $id})-[r:VIEWED]->(p:Product)
+        OPTIONAL MATCH (p)-[:BELONGS_TO]->(cat:Category)
         RETURN p.id AS productId, p.name AS productName, p.price AS price,
+               p.brand AS brand, cat.name AS categoryName,
                r.viewedAt AS viewedAt
         ORDER BY r.viewedAt DESC
-        LIMIT 20
+        LIMIT 30
         """,
-        id=customer_id
+        id=cid
     )
     return {
-        "bought": [dict(r) for r in bought],
-        "viewed": [dict(r) for r in viewed]
+        "bought": [serialize_val(dict(r)) for r in bought],
+        "viewed": [serialize_val(dict(r)) for r in viewed]
     }
 
 # ── POST /api/customers/{customer_id}/view/{product_id} ──────────
 @router.post("/{customer_id}/view/{product_id}")
 def view_product(customer_id: str, product_id: str, session: Session = Depends(get_session)):
-    c = session.run("MATCH (c:Customer {id:$id}) RETURN c", id=customer_id).single()
-    p = session.run("MATCH (p:Product  {id:$id}) RETURN p", id=product_id).single()
+    cid = customer_id.strip().upper()
+    pid = product_id.strip().upper()
+    c = session.run("MATCH (c:Customer {id:$id}) RETURN c", id=cid).single()
+    p = session.run("MATCH (p:Product  {id:$id}) RETURN p", id=pid).single()
     if not c:
         raise HTTPException(status_code=404, detail="Customer not found")
     if not p:
@@ -81,7 +98,7 @@ def view_product(customer_id: str, product_id: str, session: Session = Depends(g
         MATCH (c:Customer {id:$cid}), (p:Product {id:$pid})
         CREATE (c)-[:VIEWED {sessionId:$sid, viewedAt:$viewedAt}]->(p)
         """,
-        cid=customer_id, pid=product_id,
+        cid=cid, pid=pid,
         sid=session_id, viewedAt=viewed_at
     )
     return {"message": "View recorded", "sessionId": session_id}
@@ -89,8 +106,10 @@ def view_product(customer_id: str, product_id: str, session: Session = Depends(g
 # ── POST /api/customers/{customer_id}/buy/{product_id} ───────────
 @router.post("/{customer_id}/buy/{product_id}")
 def buy_product(customer_id: str, product_id: str, body: BuyRequest, session: Session = Depends(get_session)):
-    c = session.run("MATCH (c:Customer {id:$id}) RETURN c", id=customer_id).single()
-    p_rec = session.run("MATCH (p:Product  {id:$id}) RETURN p", id=product_id).single()
+    cid = customer_id.strip().upper()
+    pid = product_id.strip().upper()
+    c = session.run("MATCH (c:Customer {id:$id}) RETURN c", id=cid).single()
+    p_rec = session.run("MATCH (p:Product  {id:$id}) RETURN p", id=pid).single()
     if not c:
         raise HTTPException(status_code=404, detail="Customer not found")
     if not p_rec:
@@ -98,7 +117,7 @@ def buy_product(customer_id: str, product_id: str, body: BuyRequest, session: Se
     p_data = dict(p_rec["p"])
     if p_data.get("stock", 0) < body.quantity:
         raise HTTPException(status_code=400, detail="Not enough stock")
-    order_id     = f"O-{customer_id}-WEB-{uuid.uuid4().hex[:4].upper()}"
+    order_id     = f"O-{cid}-WEB-{uuid.uuid4().hex[:4].upper()}"
     purchased_at = datetime.datetime.utcnow().isoformat()
     session.run(
         """
@@ -107,7 +126,7 @@ def buy_product(customer_id: str, product_id: str, body: BuyRequest, session: Se
         WITH p
         SET p.stock = p.stock - $qty
         """,
-        cid=customer_id, pid=product_id,
+        cid=cid, pid=pid,
         oid=order_id, pat=purchased_at, qty=body.quantity
     )
     return {"message": "Purchase recorded", "orderId": order_id}
@@ -115,7 +134,7 @@ def buy_product(customer_id: str, product_id: str, body: BuyRequest, session: Se
 # ── POST /api/customers (create) ─────────────────────────────────
 @router.post("/", status_code=201)
 def create_customer(body: CustomerCreate, session: Session = Depends(get_session)):
-    cid = body.id or ("C" + uuid.uuid4().hex[:4].upper())
+    cid = (body.id or ("C" + uuid.uuid4().hex[:4])).strip().upper()
     existing = session.run("MATCH (c:Customer {email:$email}) RETURN c", email=body.email).single()
     if existing:
         raise HTTPException(status_code=400, detail="Email already exists")

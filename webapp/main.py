@@ -42,6 +42,10 @@ def serve_product():
 def serve_customer():
     return FileResponse(os.path.join(frontend_dir, "customer.html"))
 
+@app.get("/login", include_in_schema=False)
+def serve_login():
+    return FileResponse(os.path.join(frontend_dir, "login.html"))
+
 @app.on_event("shutdown")
 def shutdown():
     close_driver()

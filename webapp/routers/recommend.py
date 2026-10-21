@@ -4,10 +4,21 @@ from database import get_session
 
 router = APIRouter()
 
+def serialize_val(val):
+    if hasattr(val, "year") and hasattr(val, "month") and hasattr(val, "day"):
+        return str(val)
+    if hasattr(val, "iso_format"):
+        return val.iso_format()
+    if isinstance(val, dict):
+        return {k: serialize_val(v) for k, v in val.items()}
+    if isinstance(val, list):
+        return [serialize_val(v) for v in val]
+    return val
+
 # ── GET /api/recommend/collaborative/{customer_id} ────────────────
-# Collaborative Filtering chinh (File 06 - Query 1)
 @router.get("/collaborative/{customer_id}")
 def collaborative_filtering(customer_id: str, limit: int = 10, session: Session = Depends(get_session)):
+    cid = customer_id.strip().upper()
     result = session.run(
         """
         MATCH (c1:Customer {id: $cid})-[:BOUGHT]->(p1:Product)<-[:BOUGHT]-(c2:Customer)-[:BOUGHT]->(p2:Product)
@@ -22,14 +33,15 @@ def collaborative_filtering(customer_id: str, limit: int = 10, session: Session 
         ORDER BY supportCount DESC, sharedProductCount DESC, productId ASC
         LIMIT $limit
         """,
-        cid=customer_id, limit=limit
+        cid=cid, limit=limit
     )
-    return [dict(r) for r in result]
+    return [serialize_val(dict(r)) for r in result]
 
 # ── GET /api/recommend/explain/{customer_id}/{product_id} ─────────
-# Giai thich vi sao goi y (File 06 - Query 2)
 @router.get("/explain/{customer_id}/{product_id}")
 def explain_recommendation(customer_id: str, product_id: str, session: Session = Depends(get_session)):
+    cid = customer_id.strip().upper()
+    pid = product_id.strip().upper()
     result = session.run(
         """
         MATCH (target:Customer {id: $cid})-[:BOUGHT]->(shared:Product)<-[:BOUGHT]-(supporter:Customer)
@@ -43,17 +55,17 @@ def explain_recommendation(customer_id: str, product_id: str, session: Session =
                count(DISTINCT supporter) AS supportCount,
                collect(DISTINCT {productId: shared.id, productName: shared.name}) AS sharedPurchaseEvidence
         """,
-        cid=customer_id, pid=product_id
+        cid=cid, pid=pid
     )
     record = result.single()
     if not record:
-        return {"message": "No explanation path found", "targetCustomer": customer_id, "recommendedProductId": product_id}
-    return dict(record)
+        return {"message": "No explanation path found", "targetCustomer": cid, "recommendedProductId": pid}
+    return serialize_val(dict(record))
 
 # ── GET /api/recommend/copurchase/{product_id} ────────────────────
-# Goi y mua kem theo cung orderId (File 06 - Query 3)
 @router.get("/copurchase/{product_id}")
 def co_purchase(product_id: str, limit: int = 10, session: Session = Depends(get_session)):
+    pid = product_id.strip().upper()
     result = session.run(
         """
         MATCH (c:Customer)-[b1:BOUGHT]->(p1:Product {id: $pid}),
@@ -66,14 +78,14 @@ def co_purchase(product_id: str, limit: int = 10, session: Session = Depends(get
         ORDER BY coPurchaseOrderCount DESC, productId ASC
         LIMIT $limit
         """,
-        pid=product_id, limit=limit
+        pid=pid, limit=limit
     )
-    return [dict(r) for r in result]
+    return [serialize_val(dict(r)) for r in result]
 
 # ── GET /api/recommend/complementary/{product_id} ─────────────────
-# San pham bo tro (File 06 - Query 4)
 @router.get("/complementary/{product_id}")
 def complementary(product_id: str, session: Session = Depends(get_session)):
+    pid = product_id.strip().upper()
     result = session.run(
         """
         MATCH (base:Product {id: $pid})-[:COMPLEMENTARY_TO]->(rec:Product)
@@ -83,14 +95,14 @@ def complementary(product_id: str, session: Session = Depends(get_session)):
                'San pham bo tro duoc khai bao trong du lieu' AS reason
         ORDER BY rec.id
         """,
-        pid=product_id
+        pid=pid
     )
-    return [dict(r) for r in result]
+    return [serialize_val(dict(r)) for r in result]
 
 # ── GET /api/recommend/viewed-also/{customer_id} ──────────────────
-# Goi y theo lich su xem
 @router.get("/viewed-also/{customer_id}")
 def viewed_also(customer_id: str, limit: int = 8, session: Session = Depends(get_session)):
+    cid = customer_id.strip().upper()
     result = session.run(
         """
         MATCH (c1:Customer {id: $cid})-[:VIEWED]->(p1:Product)<-[:VIEWED]-(c2:Customer)-[:BOUGHT]->(p2:Product)
@@ -103,6 +115,6 @@ def viewed_also(customer_id: str, limit: int = 8, session: Session = Depends(get
         ORDER BY score DESC
         LIMIT $limit
         """,
-        cid=customer_id, limit=limit
+        cid=cid, limit=limit
     )
-    return [dict(r) for r in result]
+    return [serialize_val(dict(r)) for r in result]
